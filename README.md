@@ -5,12 +5,14 @@ Eine Windows-Desktop-Anwendung für Spracheingabe mit umfassender Bluetooth-Unte
 ## Features
 
 - **Spracherkennung** in mehreren Sprachen (Deutsch, Englisch, Russisch, Französisch, Spanisch)
-- **Automatische Geräte-Erkennung** mit Qualitätsmessung
+- **Echtzeit-Waveform-Visualisierung** - Live-Anzeige der Audio-Wellenform während der Aufnahme
+- **Automatische Geräte-Erkennung** mit Qualitätsmessung (0-100%)
 - **Bluetooth-Unterstützung** mit spezieller Optimierung für Samsung Galaxy Buds und andere Bluetooth-Kopfhörer
 - **Hot-Plug-Erkennung** - Geräte werden automatisch erkannt beim Anschließen/Trennen
 - **Intelligente Geräte-Filterung** - Nicht-funktionierende Geräte werden automatisch ausgefiltert
 - **Konfigurations-Speicherung** - Einstellungen werden pro Gerät gespeichert
 - **Erweiterte Test-Funktionen** für Mikrofon-Debugging
+- **Audio-Level-Monitor** - Visuelle Pegelanzeige in Echtzeit
 
 ## Installation
 
@@ -24,7 +26,7 @@ Eine Windows-Desktop-Anwendung für Spracheingabe mit umfassender Bluetooth-Unte
 
 1. Repository klonen:
 ```bash
-git clone https://github.com/yourusername/Diktieren.git
+git clone https://github.com/Moddy14/Diktieren.git
 cd Diktieren
 ```
 

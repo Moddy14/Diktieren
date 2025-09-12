@@ -80,6 +80,8 @@ import numpy as np
 import logging
 from logging.handlers import RotatingFileHandler
 from microphone_level_monitor import MicLevelBar
+from PyQt6.QtGui import QPainter, QPen, QColor
+from PyQt6.QtCore import QPointF
 
 # Logging einrichten
 LOG_PATH = os.path.join(os.path.dirname(__file__), "SprachEingabe.log")
@@ -96,12 +98,113 @@ if not logger.handlers:
     logger.addHandler(console)
 logger.info("=== App start ===")
 
+class WaveformWidget(QWidget):
+    """Widget to display audio waveform in real-time"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(100)
+        self.setMaximumHeight(150)
+        self.audio_data = []
+        self.max_points = 2000  # More points for longer history
+        self.downsample_factor = 5  # Less aggressive downsampling for more detail
+        
+    def update_waveform(self, audio_chunk):
+        """Update waveform with new audio data - optimized for real-time"""
+        if audio_chunk is None or len(audio_chunk) == 0:
+            return
+            
+        try:
+            # Balanced downsampling for detail and performance
+            chunk_flat = audio_chunk.flatten()
+            
+            # Simple downsampling to preserve waveform shape
+            step = max(1, len(chunk_flat) // self.downsample_factor)
+            downsampled = chunk_flat[::step]
+            
+            # Add to buffer
+            self.audio_data.extend(downsampled.tolist())
+            
+            # Keep only last max_points for scrolling effect
+            if len(self.audio_data) > self.max_points:
+                self.audio_data = self.audio_data[-self.max_points:]
+            
+            # Immediate repaint for real-time feel
+            self.update()
+        except Exception as e:
+            logger.debug(f"Waveform update error: {e}")
+    
+    def clear_waveform(self):
+        """Clear the waveform display"""
+        self.audio_data = []
+        self.update()
+    
+    def paintEvent(self, event):
+        """Paint the waveform - optimized for performance"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        
+        # Background
+        painter.fillRect(self.rect(), QColor(30, 30, 30))
+        
+        width = self.width()
+        height = self.height()
+        center_y = height // 2
+        
+        # Draw grid lines for better visualization
+        painter.setPen(QPen(QColor(50, 50, 50), 1))
+        # Horizontal center line
+        painter.drawLine(0, center_y, width, center_y)
+        # Vertical grid lines
+        for x in range(0, width, width // 10):
+            painter.drawLine(x, 0, x, height)
+        
+        if not self.audio_data:
+            return
+        
+        # Calculate scaling factor with some headroom
+        data_array = np.array(self.audio_data)
+        max_val = np.max(np.abs(data_array)) if len(data_array) > 0 else 1
+        if max_val < 0.01:  # Minimum threshold to avoid noise amplification
+            max_val = 0.01
+        
+        # Scale factor with 80% of height to leave some margin
+        scale_factor = (height * 0.4) / max_val
+        
+        # Create path for smoother drawing
+        points = []
+        data_len = len(self.audio_data)
+        
+        # Draw waveform with improved visualization
+        if data_len > 1:
+            # Calculate points
+            for i in range(data_len):
+                x = (i / (data_len - 1)) * width
+                y = center_y - (self.audio_data[i] * scale_factor)
+                points.append(QPointF(x, y))
+            
+            # Draw waveform with subtle gradient
+            gradient_color = QColor(0, 255, 100)
+            
+            # Draw with less aggressive fading for better visibility
+            for i in range(1, len(points)):
+                # Subtle fade for older samples (minimum 100 alpha)
+                alpha = int(100 + 155 * (i / len(points)))
+                gradient_color.setAlpha(alpha)
+                painter.setPen(QPen(gradient_color, 1.5))  # Thinner line for more detail
+                painter.drawLine(points[i-1], points[i])
+        
+        # Draw current position indicator
+        if len(points) > 0:
+            painter.setPen(QPen(QColor(255, 255, 0), 3))
+            painter.drawEllipse(points[-1], 3, 3)
+
 class RecognizerWorker(QObject):
     textReady = pyqtSignal(str)
     status = pyqtSignal(str)
     error = pyqtSignal(str)
     finished = pyqtSignal()
     level = pyqtSignal(int)  # Audio level signal
+    audioData = pyqtSignal(np.ndarray)  # Audio waveform data signal
 
     def __init__(self, device_index=None, language="de-DE", languages_to_try=None, saved_config=None):
         super().__init__()
@@ -114,6 +217,7 @@ class RecognizerWorker(QObject):
         self.recorded_data = []  # KRITISCH: Global für Callback
         self.stream = None
         self.saved_config = saved_config or {}
+        self.countdown_done = False  # Track if countdown is complete
         
         # EXAKTE Parameter aus funktionierendem Test
         self.SAMPLERATE = 44100.0
@@ -151,6 +255,7 @@ class RecognizerWorker(QObject):
 
     def stop(self):
         self._running = False
+        self.countdown_done = False  # Reset for next recording
         if self.stream:
             try:
                 self.stream.stop()
@@ -165,6 +270,12 @@ class RecognizerWorker(QObject):
         # WICHTIG: IMMER alle Daten aufnehmen, nicht filtern!
         if indata is not None:
             self.recorded_data.append(indata.copy())
+            # Send audio data to waveform in real-time - ALWAYS emit for real-time display
+            # Emit immediately for real-time visualization
+            try:
+                self.audioData.emit(indata.copy())
+            except:
+                pass  # Ignore emit errors
     
     def run(self):
         self._running = True
@@ -246,6 +357,9 @@ class RecognizerWorker(QObject):
                     logger.info(f"Countdown: {i}...")
                     time.sleep(1)
                 
+                # Mark countdown as done for waveform display
+                self.countdown_done = True
+                
                 # KRITISCH: recorded_data NICHT mehr leeren nach Countdown!
                 self.status.emit("🔴 AUFNAHME LÄUFT - SPRECHEN SIE JETZT!")
                 logger.info("🔴 AUFNAHME GESTARTET - kontinuierliche Aufnahme aktiv")
@@ -277,6 +391,9 @@ class RecognizerWorker(QObject):
                     max_amp = np.max(np.abs(audio))
                     avg_amp = np.mean(np.abs(audio))
                     logger.info(f"Audio-Segment: {duration_sec:.2f}s, Max: {max_amp:.4f}, Avg: {avg_amp:.6f}")
+                    
+                    # Send audio data to waveform widget
+                    self.audioData.emit(audio)
                     
                     # Prüfe ob Audio laut genug ist
                     if max_amp < 0.001:
@@ -517,6 +634,9 @@ class DictationApp(QMainWindow):
         self.mic_level_bar = MicLevelBar(self)
         self.mic_level_bar.setMaximumHeight(80)
         
+        # Waveform display
+        self.waveform = WaveformWidget(self)
+        
         # Big status indicator
         self.status_label = QLabel("⚪ Ready")
         self.status_label.setMinimumHeight(60)
@@ -570,6 +690,7 @@ class DictationApp(QMainWindow):
         layout.addWidget(device_group)
         layout.addLayout(control_layout)
         layout.addWidget(self.mic_level_bar)  # Pegelanzeige hinzufügen
+        layout.addWidget(self.waveform)  # Waveform hinzufügen
         layout.addWidget(self.status_label)
         layout.addWidget(self.recording_label)
         layout.addWidget(self.text, stretch=1)
@@ -1326,6 +1447,7 @@ class DictationApp(QMainWindow):
         self.worker.error.connect(self.on_error)
         self.worker.finished.connect(self.on_finished)
         self.worker.level.connect(self.on_level)
+        self.worker.audioData.connect(self.waveform.update_waveform)
         
         logger.info("Thread started")
         self.thread.start()
@@ -1360,6 +1482,9 @@ class DictationApp(QMainWindow):
         
         # Stop mic level monitor
         self.mic_level_bar.stop()
+        
+        # Clear waveform
+        self.waveform.clear_waveform()
 
     def flash_recording(self):
         """Disabled blinking - keep static label."""
@@ -1645,6 +1770,9 @@ class DictationApp(QMainWindow):
         
         # Stop mic level monitor
         self.mic_level_bar.stop()
+        
+        # Clear waveform
+        self.waveform.clear_waveform()
         
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
