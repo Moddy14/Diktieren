@@ -733,24 +733,47 @@ class DictationApp(QMainWindow):
                     sd.check_input_settings(device=device_idx, channels=ch, samplerate=sr)
                     
                     # Quick audio level test (0.3 seconds) to check for actual signal
+                    quality = 50  # Default quality for devices that pass basic test
                     try:
+                        # Try to activate the device with warmup
+                        warmup_stream = sd.InputStream(
+                            device=device_idx,
+                            channels=ch,
+                            samplerate=sr,
+                            blocksize=512,
+                            dtype='float32'
+                        )
+                        warmup_stream.start()
+                        time.sleep(0.1)  # Brief warmup
+                        warmup_stream.close()
+                        
+                        # Now record a test sample
                         recording = sd.rec(int(0.3 * sr), samplerate=sr, channels=ch,
                                          device=device_idx, dtype='float32')
                         sd.wait()
                         
                         # Check if device has any signal
                         max_val = np.max(np.abs(recording))
-                        if max_val < 0.0001:  # Near-zero signal = non-functional
-                            logger.debug(f"Device {device_idx} has no signal (max={max_val:.6f}), skipping")
-                            return False, None, None, 0  # Device has no signal, don't add it
                         
-                        # Calculate quality percentage (logarithmic scale for better representation)
-                        # Reference: 0.01 = poor, 0.1 = good, 1.0 = excellent
-                        quality = 0
-                        if max_val > 0:
-                            # Logarithmic scale: -40dB to 0dB mapped to 0% to 100%
-                            db = 20 * np.log10(max_val)
-                            quality = max(0, min(100, int((db + 40) * 2.5)))
+                        # Don't reject devices with low signal - Bluetooth devices often start quiet
+                        if max_val < 0.00001:  # Extremely low signal
+                            # Device might be Bluetooth that needs activation
+                            quality = 25  # Low quality score but still usable
+                            logger.debug(f"Device {device_idx} has very low signal (max={max_val:.6f}), may need warmup")
+                        elif max_val < 0.0001:
+                            quality = 35  # Moderate-low quality
+                            logger.debug(f"Device {device_idx} has low signal (max={max_val:.6f})")
+                        elif max_val > 0:
+                            # Calculate quality percentage (improved scale)
+                            # Scale: 0.0001 = 35%, 0.001 = 50%, 0.01 = 70%, 0.1 = 90%, 1.0 = 100%
+                            if max_val >= 0.1:
+                                quality = 90
+                            elif max_val >= 0.01:
+                                quality = 70
+                            elif max_val >= 0.001:
+                                quality = 50
+                            else:
+                                quality = 40
                         
                         # Additional test: Try to open a stream (catches WDM-KS failures)
                         # This is crucial for devices that appear to work but fail when actually used
@@ -790,7 +813,7 @@ class DictationApp(QMainWindow):
                         # Other errors - might still work with warmup
                         logger.debug(f"Recording test skipped for device {device_idx}: {rec_err}")
                         logger.debug(f"Device {device_idx} tentatively accepted at {sr}Hz, {ch}ch")
-                        return True, sr, ch, 50  # Default quality for untested devices
+                        return True, sr, ch, 45  # Default quality for untested devices (slightly below average)
                         
                 except Exception as e:
                     logger.debug(f"Config {sr}Hz failed for device {device_idx}: {e}")

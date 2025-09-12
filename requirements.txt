@@ -1,0 +1,15 @@
+# Core GUI Framework
+PyQt6>=6.5.0
+PyQt6-Qt6>=6.5.0
+PyQt6-sip>=13.5.0
+
+# Audio Processing
+sounddevice>=0.4.6
+numpy>=1.24.0
+pyaudio>=0.2.11
+
+# Speech Recognition
+SpeechRecognition>=3.10.0
+
+# Optional but recommended for better audio handling
+scipy>=1.10.0
