@@ -1,0 +1,459 @@
+1) Direkte Antwort (Kurzfassung)
+
+Diese Änderungen aus Mikrophon.Test.py solltest du in Diktieren.py übernehmen:
+
+Geräte-Profiling & Persistenz pro Mikro (QSettings): funktionierende Parameter (Samplerate/Kanäle/Latenz/Host-API) werden pro Gerät gespeichert und wiederverwendet. Das stabilisiert Bluetooth/Headsets stark. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Hot-Plug-Erkennung (Timer): erkennt neu angesteckte/entfernte Geräte und refresht die Liste automatisch. 
+
+Mikrophon.Test
+
+Waveform-Oszilloskop & Pegelanzeige im Testdialog (optional für Diktieren): verbessertes Live-Feedback (RMS-Pegel + Wellenform). 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Strenger Aufnahme-Ablauf (Warmups + Countdown + „nie nach Countdown löschen“): sichert, dass kein Anfang der Sprache verloren geht. (Du hast Teile davon schon im Worker, siehe unten—aber hier ist es komplett und konsistent formuliert.) 
+
+Mikrophon.Test
+
+Fallback-Pfad (im Testdialog): Wenn ein Stream-Callback nicht sauber startet, blockierende Aufnahme inkl. alternativer Host-APIs ausprobieren (DirectSound/WASAPI). (Für Diktieren optional – als Robustheits-Fallback.) 
+
+Mikrophon.Test
+
+Batch-Test aller Mikrofone** (optional): schneller Qualitäts-Check/Export. 
+
+Mikrophon.Test
+
+Gutes Zeichen: Diktieren.py enthält bereits viele der „kritischen Erkenntnisse“ (Warmups, Aufnahme nie nach Countdown löschen, Segment-Verarbeitung). Wir verankern nun Persistenz, Hot-Plug, und (optional) Test-Tools. 
+
+Diktieren
+
+3) Änderungen im Detail + präzise Einbau-Vorgaben
+A) Persistente Geräte-Konfiguration (QSettings) – empfohlen
+
+Warum: Bluetooth/Headsets (z. B. Buds) sind extrem sensibel auf Samplerate/Latency/Host-API. Der Testdialog speichert funktionierende Parameter pro Device-Name und verwendet sie wieder. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Was übernehmen:
+
+QSettings importieren und eine Geräte-Key-Funktion in DictationApp anlegen.
+
+Beim Start/bei Gerätewahl gespeicherte Parameter laden.
+
+Diese Parameter beim Start des Workers durchreichen (oder der Worker lädt sie selbst anhand des Device-Namens).
+
+Snippets (für Diktieren.py):
+
+# 1) Imports ergänzen (oben bei den PyQt-Imports)
+from PyQt6.QtCore import QSettings
+
+# 2) In DictationApp.__init__ (nach self.setup_ui()):
+self.settings = QSettings('MikrofoneTool', 'DeviceConfigs')
+
+def _device_config_key(self, device_name: str) -> str:
+    return f"device_{device_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:50]}"
+
+def load_saved_config_for_current_device(self):
+    idx = self.mic_combo.currentData()
+    if idx is None:
+        return None
+    info = sd.query_devices(idx)
+    name = info.get('name', 'Unknown')
+    key = self._device_config_key(name)
+    try:
+        sr = self.settings.value(f"{key}_samplerate", type=int)
+        ch = self.settings.value(f"{key}_channels", type=int)
+        lat_str = self.settings.value(f"{key}_latency", type=str)
+        latency = None if (lat_str in (None, 'None', 'null', '')) else float(lat_str)
+        if sr and ch:
+            return {"samplerate": sr, "channels": ch, "latency": latency, "host_api": sd.query_hostapis()[info['hostapi']]['name']}
+    except Exception:
+        pass
+    return None
+
+# 3) Beim Starten des Workers (in start_dictation) gespeicherte Config mitgeben:
+saved_cfg = self.load_saved_config_for_current_device()
+
+if self.language == "auto":
+    self.worker = RecognizerWorker(device_index=device_index, language="auto",
+                                   languages_to_try=self.auto_languages,
+                                   saved_config=saved_cfg)
+else:
+    self.worker = RecognizerWorker(device_index=device_index, language=self.language,
+                                   saved_config=saved_cfg)
+
+# 4) Worker anpassen: RecognizerWorker.__init__ Signatur und Nutzen
+class RecognizerWorker(QObject):
+    def __init__(self, device_index=None, language="de-DE", languages_to_try=None, saved_config=None):
+        super().__init__()
+        self.device_index = device_index
+        self.language = language
+        self.languages_to_try = languages_to_try or ["de-DE","en-US","ru-RU","fr-FR","es-ES"]
+        self.saved_config = saved_config or {}
+        # Defaults:
+        self.SAMPLERATE = 44100.0
+        self.CHANNELS = 1
+        self.BLOCKSIZE = 512
+        self.DTYPE = 'float32'
+        self.LATENCY = None  # lasse None, wenn nichts gespeichert
+
+    def _apply_saved_config_if_any(self):
+        try:
+            if self.saved_config:
+                self.SAMPLERATE = float(self.saved_config.get("samplerate", self.SAMPLERATE))
+                self.CHANNELS = int(self.saved_config.get("channels", self.CHANNELS))
+                lat = self.saved_config.get("latency", None)
+                self.LATENCY = (float(lat) if lat is not None else None)
+        except Exception:
+            pass
+
+
+Rufe _apply_saved_config_if_any() direkt vor dem Stream-Start in run() auf, damit die gespeicherten Werte Vorrang gegenüber generischen Defaults haben. (Das entspricht der Idee aus dem Testdialog, der funktionierende Konfigurationen persistiert.) 
+
+Mikrophon.Test
+
+Optional: Wenn im Worker ein Recording erfolgreich war, kannst du die tatsächlich verwendeten Parameter wieder speichern (analog save_config im Testdialog). 
+
+Mikrophon.Test
+
+B) Hot-Plug-Erkennung (auto-Refresh) – empfohlen
+
+Warum: Nutzer stecken Headsets um; die Liste bleibt so automatisch frisch. 
+
+Mikrophon.Test
+
+Snippets (für DictationApp):
+
+# 1) In __init__:
+self.last_device_count = 0
+self.last_device_names = set()
+self.device_monitor = QTimer(self)
+self.device_monitor.timeout.connect(self.check_device_changes)
+self.device_monitor.start(3000)  # alle 3 Sekunden
+
+# 2) Methode übernehmen (leicht adaptiert):
+def check_device_changes(self):
+    try:
+        devices = sd.query_devices()
+        current = [d for d in devices if d.get('max_input_channels', 0) > 0]
+        count = len(current)
+        names = set(d.get('name','') for d in current)
+        if count != self.last_device_count or names != self.last_device_names:
+            added = names - self.last_device_names
+            removed = self.last_device_names - names
+            self.last_device_count = count
+            self.last_device_names = names
+            if added or removed:
+                self.status_label.setText(" | ".join((
+                    *(f"🔌 Neu: {a[:30]}" for a in list(added)[:1]),
+                    *(f"🔍 Entfernt: {r[:30]}" for r in list(removed)[:1]),
+                )))
+                self.scan_devices()
+                QTimer.singleShot(5000, lambda: self.status_label.setText("Bereit"))
+    except Exception:
+        pass
+
+
+Beleg aus Mikrophon.Test.py: Geräte-Monitoring und Auto-Refresh. 
+
+Mikrophon.Test
+
+C) Aufnahme-Ablauf (Warmup → Stream-Warmup → Countdown → nicht leeren) – prüfen/angleichen
+
+Du nutzt das bereits, aber stelle sicher, dass die Reihenfolge/„nie nach Countdown löschen“ wirklich überall eingehalten wird (Worker-Loop).
+Beleg für das korrekte Muster im Test: Countdown löscht Warmup-Daten, danach nie wieder. 
+
+Mikrophon.Test
+
+
+In Diktieren.py ist die Methodik schon angelegt („KRITISCHE ERKENNTNISSE“ + Segmentlogik). 
+
+Diktieren
+
+D) Optional: Test-Tools (Waveform/Batch-Test/Playback/Save)
+
+WaveformWidget + Pegel (RMS) für unmittelbares Feedback im Testdialog: verbessert Diagnose bei „zu leise/kein Signal“. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Batch-Test: Geräte durchtesten, Amplituden/Qualität tabellarisch erfassen, exportierbar. 
+
+Mikrophon.Test
+
+Wenn du das auch in Diktieren.py willst, füge z. B. einen „🎛️ Testen…“-Button hinzu, der MicrophoneTestDialog für das aktuell gewählte Gerät öffnet (die Klasse kannst du 1:1 übernehmen/auslagern). Button-Verknüpfung ist im Testdialog ersichtlich. 
+
+Mikrophon.Test
+
+E) Optional: Fallback bei Stream-Fehlern
+
+Der Testdialog probiert bei Stream-Fehlschlag blocking-record + alternative Host-APIs (WASAPI/DirectSound) in Reihenfolge durch. Das kannst du (behutsam) in RecognizerWorker.run() als Fallback-Strategie einbauen, wenn wiederholt sd.InputStream fehlschlägt. 
+
+Mikrophon.Test
+
+4) Alternativen & Trade-offs
+
+Nur Persistenz & Hot-Plug (leichtgewichtig): schnell integriert, höchste Wirkung auf Stabilität; UI bleibt unverändert.
+
+Zusätzlich Test-Dialog: mehr Code, aber unschlagbar für Support/Diagnose.
+
+Waveform auch in Diktieren: hübsch, aber MicLevelBar existiert bereits – Trade-off: mehr CPU/Zeichenlogik vs. Nutzen.
+
+Autom. Host-API-Fallback im Live-Dicteren: robust, aber komplexer Fehlerpfad – ich würde es zuerst im Testtool belassen und später in den Live-Worker heben, wenn nötig.
+
+5) Praktische Zusammenfassung / Action-Plan
+
+QSettings-Persistenz einbauen (Snippets A) → Worker nutzt gespeicherte samplerate/channels/latency. 
+
+Mikrophon.Test
+
+Hot-Plug-Timer ergänzen (Snippets B) → Auto-Refresh der Liste. 
+
+Mikrophon.Test
+
+Ablauflogik verifizieren (C) → Warmups/Countdown/„nicht löschen“ überall konsistent. 
+
+Mikrophon.Test
+
+ 
+
+Diktieren
+
+Optional: Test-Dialog + Waveform (D) → Button „Testen…“ in DictationApp. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Optional: Fallback-Strategie (E) → blockierende Aufnahme/altern. Host-APIs bei Stream-Fehlern. 
+
+3) Änderungen im Detail + präzise Einbau-Vorgaben
+A) Persistente Geräte-Konfiguration (QSettings) – empfohlen
+
+Warum: Bluetooth/Headsets (z. B. Buds) sind extrem sensibel auf Samplerate/Latency/Host-API. Der Testdialog speichert funktionierende Parameter pro Device-Name und verwendet sie wieder. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Was übernehmen:
+
+QSettings importieren und eine Geräte-Key-Funktion in DictationApp anlegen.
+
+Beim Start/bei Gerätewahl gespeicherte Parameter laden.
+
+Diese Parameter beim Start des Workers durchreichen (oder der Worker lädt sie selbst anhand des Device-Namens).
+
+Snippets (für Diktieren.py):
+
+# 1) Imports ergänzen (oben bei den PyQt-Imports)
+from PyQt6.QtCore import QSettings
+
+# 2) In DictationApp.__init__ (nach self.setup_ui()):
+self.settings = QSettings('MikrofoneTool', 'DeviceConfigs')
+
+def _device_config_key(self, device_name: str) -> str:
+    return f"device_{device_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:50]}"
+
+def load_saved_config_for_current_device(self):
+    idx = self.mic_combo.currentData()
+    if idx is None:
+        return None
+    info = sd.query_devices(idx)
+    name = info.get('name', 'Unknown')
+    key = self._device_config_key(name)
+    try:
+        sr = self.settings.value(f"{key}_samplerate", type=int)
+        ch = self.settings.value(f"{key}_channels", type=int)
+        lat_str = self.settings.value(f"{key}_latency", type=str)
+        latency = None if (lat_str in (None, 'None', 'null', '')) else float(lat_str)
+        if sr and ch:
+            return {"samplerate": sr, "channels": ch, "latency": latency, "host_api": sd.query_hostapis()[info['hostapi']]['name']}
+    except Exception:
+        pass
+    return None
+
+# 3) Beim Starten des Workers (in start_dictation) gespeicherte Config mitgeben:
+saved_cfg = self.load_saved_config_for_current_device()
+
+if self.language == "auto":
+    self.worker = RecognizerWorker(device_index=device_index, language="auto",
+                                   languages_to_try=self.auto_languages,
+                                   saved_config=saved_cfg)
+else:
+    self.worker = RecognizerWorker(device_index=device_index, language=self.language,
+                                   saved_config=saved_cfg)
+
+# 4) Worker anpassen: RecognizerWorker.__init__ Signatur und Nutzen
+class RecognizerWorker(QObject):
+    def __init__(self, device_index=None, language="de-DE", languages_to_try=None, saved_config=None):
+        super().__init__()
+        self.device_index = device_index
+        self.language = language
+        self.languages_to_try = languages_to_try or ["de-DE","en-US","ru-RU","fr-FR","es-ES"]
+        self.saved_config = saved_config or {}
+        # Defaults:
+        self.SAMPLERATE = 44100.0
+        self.CHANNELS = 1
+        self.BLOCKSIZE = 512
+        self.DTYPE = 'float32'
+        self.LATENCY = None  # lasse None, wenn nichts gespeichert
+
+    def _apply_saved_config_if_any(self):
+        try:
+            if self.saved_config:
+                self.SAMPLERATE = float(self.saved_config.get("samplerate", self.SAMPLERATE))
+                self.CHANNELS = int(self.saved_config.get("channels", self.CHANNELS))
+                lat = self.saved_config.get("latency", None)
+                self.LATENCY = (float(lat) if lat is not None else None)
+        except Exception:
+            pass
+
+
+Rufe _apply_saved_config_if_any() direkt vor dem Stream-Start in run() auf, damit die gespeicherten Werte Vorrang gegenüber generischen Defaults haben. (Das entspricht der Idee aus dem Testdialog, der funktionierende Konfigurationen persistiert.) 
+
+Mikrophon.Test
+
+Optional: Wenn im Worker ein Recording erfolgreich war, kannst du die tatsächlich verwendeten Parameter wieder speichern (analog save_config im Testdialog). 
+
+Mikrophon.Test
+
+B) Hot-Plug-Erkennung (auto-Refresh) – empfohlen
+
+Warum: Nutzer stecken Headsets um; die Liste bleibt so automatisch frisch. 
+
+Mikrophon.Test
+
+Snippets (für DictationApp):
+
+# 1) In __init__:
+self.last_device_count = 0
+self.last_device_names = set()
+self.device_monitor = QTimer(self)
+self.device_monitor.timeout.connect(self.check_device_changes)
+self.device_monitor.start(3000)  # alle 3 Sekunden
+
+# 2) Methode übernehmen (leicht adaptiert):
+def check_device_changes(self):
+    try:
+        devices = sd.query_devices()
+        current = [d for d in devices if d.get('max_input_channels', 0) > 0]
+        count = len(current)
+        names = set(d.get('name','') for d in current)
+        if count != self.last_device_count or names != self.last_device_names:
+            added = names - self.last_device_names
+            removed = self.last_device_names - names
+            self.last_device_count = count
+            self.last_device_names = names
+            if added or removed:
+                self.status_label.setText(" | ".join((
+                    *(f"🔌 Neu: {a[:30]}" for a in list(added)[:1]),
+                    *(f"🔍 Entfernt: {r[:30]}" for r in list(removed)[:1]),
+                )))
+                self.scan_devices()
+                QTimer.singleShot(5000, lambda: self.status_label.setText("Bereit"))
+    except Exception:
+        pass
+
+
+Beleg aus Mikrophon.Test.py: Geräte-Monitoring und Auto-Refresh. 
+
+Mikrophon.Test
+
+C) Aufnahme-Ablauf (Warmup → Stream-Warmup → Countdown → nicht leeren) – prüfen/angleichen
+
+Du nutzt das bereits, aber stelle sicher, dass die Reihenfolge/„nie nach Countdown löschen“ wirklich überall eingehalten wird (Worker-Loop).
+Beleg für das korrekte Muster im Test: Countdown löscht Warmup-Daten, danach nie wieder. 
+
+Mikrophon.Test
+
+
+In Diktieren.py ist die Methodik schon angelegt („KRITISCHE ERKENNTNISSE“ + Segmentlogik). 
+
+Diktieren
+
+D) Optional: Test-Tools (Waveform/Batch-Test/Playback/Save)
+
+WaveformWidget + Pegel (RMS) für unmittelbares Feedback im Testdialog: verbessert Diagnose bei „zu leise/kein Signal“. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Batch-Test: Geräte durchtesten, Amplituden/Qualität tabellarisch erfassen, exportierbar. 
+
+Mikrophon.Test
+
+Wenn du das auch in Diktieren.py willst, füge z. B. einen „🎛️ Testen…“-Button hinzu, der MicrophoneTestDialog für das aktuell gewählte Gerät öffnet (die Klasse kannst du 1:1 übernehmen/auslagern). Button-Verknüpfung ist im Testdialog ersichtlich. 
+
+Mikrophon.Test
+
+E) Optional: Fallback bei Stream-Fehlern
+
+Der Testdialog probiert bei Stream-Fehlschlag blocking-record + alternative Host-APIs (WASAPI/DirectSound) in Reihenfolge durch. Das kannst du (behutsam) in RecognizerWorker.run() als Fallback-Strategie einbauen, wenn wiederholt sd.InputStream fehlschlägt. 
+
+Mikrophon.Test
+
+4) Alternativen & Trade-offs
+
+Nur Persistenz & Hot-Plug (leichtgewichtig): schnell integriert, höchste Wirkung auf Stabilität; UI bleibt unverändert.
+
+Zusätzlich Test-Dialog: mehr Code, aber unschlagbar für Support/Diagnose.
+
+Waveform auch in Diktieren: hübsch, aber MicLevelBar existiert bereits – Trade-off: mehr CPU/Zeichenlogik vs. Nutzen.
+
+Autom. Host-API-Fallback im Live-Dicteren: robust, aber komplexer Fehlerpfad – ich würde es zuerst im Testtool belassen und später in den Live-Worker heben, wenn nötig.
+
+5) Praktische Zusammenfassung / Action-Plan
+
+QSettings-Persistenz einbauen (Snippets A) → Worker nutzt gespeicherte samplerate/channels/latency. 
+
+Mikrophon.Test
+
+Hot-Plug-Timer ergänzen (Snippets B) → Auto-Refresh der Liste. 
+
+Mikrophon.Test
+
+Ablauflogik verifizieren (C) → Warmups/Countdown/„nicht löschen“ überall konsistent. 
+
+Mikrophon.Test
+
+ 
+
+Diktieren
+
+Optional: Test-Dialog + Waveform (D) → Button „Testen…“ in DictationApp. 
+
+Mikrophon.Test
+
+ 
+
+Mikrophon.Test
+
+Optional: Fallback-Strategie (E) → blockierende Aufnahme/altern. Host-APIs bei Stream-Fehlern. 
+
+Mikrophon.Test
