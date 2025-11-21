@@ -4,84 +4,32 @@
 import sys
 import os
 import subprocess
-import importlib
+import logging
+from logging.handlers import RotatingFileHandler
 import time
-import glob
 
-# Lösche alte Logs beim Start
-for old_log in glob.glob("SprachEingabe*.log"):
-    try:
-        os.remove(old_log)
-        print(f"Deleted old log: {old_log}")
-    except:
-        pass
-
-def install_package(pkg):
-    try:
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", pkg], 
-                          capture_output=True, text=True, timeout=60)
-        return r.returncode == 0
-    except Exception:
-        return False
-
-def ensure(pkg, import_name=None):
-    name = import_name or pkg
-    try:
-        importlib.import_module(name)
-        return True
-    except Exception:
-        if install_package(pkg):
-            try:
-                importlib.invalidate_caches()
-                importlib.import_module(name)
-                return True
-            except Exception:
-                pass
-        
-        if pkg.lower() == "pyaudio":
-            install_package("pipwin")
-            try:
-                subprocess.run([sys.executable, "-m", "pipwin", "install", "pyaudio"], 
-                             capture_output=True, timeout=300)
-                importlib.invalidate_caches()
-                importlib.import_module("pyaudio")
-                return True
-            except Exception:
-                return False
-        return False
-
-print("Checking dependencies...")
-if not ensure("PyQt6"):
-    print("PyQt6 could not be installed")
-    sys.exit(1)
-if not ensure("SpeechRecognition", "speech_recognition"):
-    print("SpeechRecognition could not be installed")
-    sys.exit(1)
-if not ensure("pyaudio", "pyaudio"):
-    print("PyAudio missing - Speech recognition will be limited")
-if not ensure("sounddevice"):
-    print("Sounddevice could not be installed")
-    sys.exit(1)
-if not ensure("numpy"):
-    print("Numpy could not be installed")
+# Check dependencies
+try:
+    import PyQt6
+    import speech_recognition as sr
+    import pyaudio
+    import sounddevice as sd
+    import numpy as np
+except ImportError as e:
+    print(f"Missing dependency: {e}")
+    print("Please install required packages:")
+    print("pip install -r requirements.txt")
     sys.exit(1)
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QSize, QTimer, QSettings
-from PyQt6.QtGui import QTextCursor, QFont, QPalette, QColor
+from PyQt6.QtGui import QTextCursor, QFont, QPalette, QColor, QPainter, QPen
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QLabel, QPushButton, QTextEdit, 
                             QComboBox, QSizePolicy, QStatusBar, QGroupBox,
                             QDialog, QMessageBox, QProgressBar, QListWidget, 
                             QListWidgetItem)
-import speech_recognition as sr
-import pyaudio
-import sounddevice as sd
-import numpy as np
-import logging
-from logging.handlers import RotatingFileHandler
-from microphone_level_monitor import MicLevelBar
-from PyQt6.QtGui import QPainter, QPen, QColor
 from PyQt6.QtCore import QPointF
+from microphone_level_monitor import MicLevelBar
 
 # Logging einrichten
 LOG_PATH = os.path.join(os.path.dirname(__file__), "SprachEingabe.log")
@@ -248,20 +196,10 @@ class RecognizerWorker(QObject):
                     logger.info(f"Using saved host API: {self.HOST_API}")
             except Exception as e:
                 logger.warning(f"Could not apply saved config: {e}")
-    
+
     def _device_config_key(self, device_name: str) -> str:
         """Generate config key for device"""
         return f"device_{device_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:50]}"
-
-    def stop(self):
-        self._running = False
-        self.countdown_done = False  # Reset for next recording
-        if self.stream:
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except:
-                pass
 
     def audio_callback(self, indata, frames, time, status):
         """Callback für Stream - KRITISCH: IMMER alle Daten aufnehmen!"""
@@ -276,7 +214,7 @@ class RecognizerWorker(QObject):
                 self.audioData.emit(indata.copy())
             except:
                 pass  # Ignore emit errors
-    
+
     def run(self):
         self._running = True
         logger.info(f"Worker start: device_index={self.device_index}, language={self.language}")
@@ -284,36 +222,21 @@ class RecognizerWorker(QObject):
         # Create recognizer für Spracherkennung
         recognizer = sr.Recognizer()
         
-        # KRITISCHE ERKENNTNISSE aus Test:
-        # 1. Warmup VOR Stream-Start (300ms Hardware)
-        # 2. Warmup NACH Stream-Start (500ms Stabilisierung)
-        # 3. Daten NUR vor Countdown leeren, NIE danach!
-        # 4. ALLE Daten aufnehmen (nicht nach Lautstärke filtern)
-        
         while self._running:
             try:
                 # Device-Info abrufen
                 device_info = sd.query_devices(self.device_index)
                 device_name = device_info['name'].lower()
                 
-                # Spezielle Parameter für Samsung Galaxy Buds3 Pro
-                if "buds3" in device_name or "buds 3" in device_name:
-                    logger.info(f"Verwende EXAKTE Parameter für Samsung Galaxy Buds3 Pro: {device_info['name']}")
-                    logger.info(f"Host API: {sd.query_hostapis(device_info['hostapi'])['name']}")
-                    # Parameter bleiben wie in __init__ gesetzt (oder aus saved_config)
-                elif not self.saved_config:  # Nur defaults verwenden wenn keine saved config
-                    # Für andere Devices standard Parameter
+                if not self.saved_config:
                     self.SAMPLERATE = device_info['default_samplerate']
-                    logger.info(f"Device: {device_info['name']}, Host API: {sd.query_hostapis(device_info['hostapi'])['name']}")
-                else:
-                    logger.info(f"Using saved config for: {device_info['name']}")
                 
-                # KRITISCH: Hardware-Warmup VOR Stream-Start (300ms)
+                # Hardware-Warmup
                 logger.info("⏳ Hardware-Warmup (300ms)...")
                 self.status.emit("⏳ Mikrofon wird aktiviert...")
                 time.sleep(0.3)
                 
-                # Stream erstellen mit Callback
+                # Stream erstellen
                 logger.info(f"Erstelle Stream: Device={self.device_index}, SR={self.SAMPLERATE}, BS={self.BLOCKSIZE}")
                 self.stream = sd.InputStream(
                     device=self.device_index,
@@ -329,93 +252,56 @@ class RecognizerWorker(QObject):
                 self.stream.start()
                 logger.info("Stream gestartet")
                 
-                # Save successful config back to settings
-                if self.device_index is not None:
-                    try:
-                        settings = QSettings('MikrofoneTool', 'DeviceConfigs')
-                        device_name = device_info.get('name', '')
-                        key = self._device_config_key(device_name)
-                        settings.setValue(f"{key}_samplerate", int(self.SAMPLERATE))
-                        settings.setValue(f"{key}_channels", self.CHANNELS)
-                        settings.setValue(f"{key}_latency", str(self.LATENCY) if self.LATENCY else "None")
-                        settings.setValue(f"{key}_host_api", sd.query_hostapis(device_info['hostapi'])['name'])
-                        logger.info(f"Saved working config for {device_name}")
-                    except Exception as e:
-                        logger.warning(f"Could not save config: {e}")
-                
-                # KRITISCH: Stream-Warmup (500ms Stabilisierung)
+                # Stream-Warmup
                 time.sleep(0.5)
                 logger.info("Stream-Warmup abgeschlossen")
                 
-                # Warmup-Daten verwerfen - KRITISCH: NUR HIER!
+                # Warmup-Daten verwerfen
                 self.recorded_data = []
-                logger.info("Warmup-Daten verworfen")
                 
-                # KRITISCH: 3-Sekunden Countdown
+                # Countdown
                 for i in range(3, 0, -1):
                     self.status.emit(f"🔢 Countdown: {i}...")
-                    logger.info(f"Countdown: {i}...")
                     time.sleep(1)
                 
-                # Mark countdown as done for waveform display
                 self.countdown_done = True
-                
-                # KRITISCH: recorded_data NICHT mehr leeren nach Countdown!
                 self.status.emit("🔴 AUFNAHME LÄUFT - SPRECHEN SIE JETZT!")
-                logger.info("🔴 AUFNAHME GESTARTET - kontinuierliche Aufnahme aktiv")
+                logger.info("🔴 AUFNAHME GESTARTET")
                 
                 # Kontinuierliche Aufnahme-Schleife
-                recording_duration = 3  # 3 Sekunden Segmente für schnellere Reaktion
+                recording_duration = 3
                 
                 while self._running:
-                    # Warte auf genug Daten (10 Sekunden)
                     time.sleep(recording_duration)
                     
-                    # Daten sammeln - KRITISCH: recorded_data NICHT leeren!
                     if not self.recorded_data:
-                        logger.debug("Keine Audio-Daten vorhanden, warte...")
                         continue
                     
                     # Audio-Daten zusammenführen
                     audio = np.concatenate(self.recorded_data) if self.recorded_data else np.array([])
-                    
-                    # recorded_data für nächste Aufnahme leeren
                     self.recorded_data = []
                     
                     if len(audio) == 0:
-                        logger.debug("Leere Audio-Daten, überspringe...")
                         continue
-                    
-                    # Debug-Info
-                    duration_sec = len(audio) / self.SAMPLERATE
-                    max_amp = np.max(np.abs(audio))
-                    avg_amp = np.mean(np.abs(audio))
-                    logger.info(f"Audio-Segment: {duration_sec:.2f}s, Max: {max_amp:.4f}, Avg: {avg_amp:.6f}")
                     
                     # Send audio data to waveform widget
                     self.audioData.emit(audio)
                     
                     # Prüfe ob Audio laut genug ist
+                    max_amp = np.max(np.abs(audio))
                     if max_amp < 0.001:
-                        logger.debug("Audio zu leise, warte auf Sprache...")
                         self.status.emit("🔴 AUFNAHME LÄUFT - Warte auf Sprache...")
                         continue
                     
-                    # Konvertiere für Spracherkennung (KRITISCH: Korrekte Konvertierung!)
+                    # Konvertiere für Spracherkennung
                     self.status.emit("⚡ Verarbeite Audio...")
-                    logger.info("Konvertiere Audio für Spracherkennung...")
                     
-                    # Konvertiere float32 zu int16 für speech_recognition
                     audio_int16 = (audio * 32767).astype(np.int16)
-                    
-                    # Falls Stereo, zu Mono konvertieren
                     if len(audio_int16.shape) > 1 and audio_int16.shape[1] > 1:
                         audio_int16 = np.mean(audio_int16, axis=1).astype(np.int16)
                     
-                    # Erstelle AudioData für speech_recognition
                     audio_data = sr.AudioData(audio_int16.tobytes(), int(self.SAMPLERATE), 2)
                     
-                    # Spracherkennung
                     try:
                         if self.language == "auto":
                             recognized_text = None
@@ -428,10 +314,8 @@ class RecognizerWorker(QObject):
                                         logger.info(f"✅ Erkannt ({lang}): {recognized_text}")
                                         break
                                 except sr.UnknownValueError:
-                                    logger.debug(f"Keine Erkennung für {lang}")
                                     continue
                             if not recognized_text:
-                                logger.debug("Keine Sprache erkannt")
                                 self.status.emit("🔴 AUFNAHME LÄUFT - Sprechen Sie deutlicher...")
                         else:
                             text = recognizer.recognize_google(audio_data, language=self.language)
@@ -440,19 +324,15 @@ class RecognizerWorker(QObject):
                                 self.textReady.emit(text)
                                 self.status.emit("🔴 AUFNAHME LÄUFT - Sprechen Sie weiter...")
                     except sr.UnknownValueError:
-                        logger.debug("Konnte Sprache nicht verstehen")
                         self.status.emit("🔴 AUFNAHME LÄUFT - Sprechen Sie deutlicher...")
                     except sr.RequestError as e:
-                        logger.error(f"Fehler bei Spracherkennung: {e}")
                         self.error.emit(f"Netzwerkfehler: {e}")
                         time.sleep(2)
 
             except Exception as e:
-                # Stream-Fehler - versuche neu zu starten
                 logger.error(f"Stream-Fehler: {e}")
                 self.error.emit(f"Mikrofon-Fehler: {str(e)[:80]}")
                 
-                # Stream schließen falls offen
                 if self.stream:
                     try:
                         self.stream.stop()
@@ -461,15 +341,12 @@ class RecognizerWorker(QObject):
                         pass
                     self.stream = None
                 
-                # Kurz warten vor Neuversuch
                 if self._running:
                     time.sleep(2)
-                    logger.info("Versuche Stream neu zu starten...")
                     continue
                 else:
                     break
         
-        # Aufräumen beim Beenden
         if self.stream:
             try:
                 self.stream.stop()
@@ -480,6 +357,137 @@ class RecognizerWorker(QObject):
         logger.info("Worker beendet")
         self.finished.emit()
 
+    def stop(self):
+        self._running = False
+        self.countdown_done = False
+        if self.stream:
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except:
+                pass
+
+
+class DeviceScannerWorker(QObject):
+    """Worker for asynchronous device scanning"""
+    deviceFound = pyqtSignal(dict)
+    scanFinished = pyqtSignal(int, int)
+    status = pyqtSignal(str)
+    error = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self._running = False
+
+    def run(self):
+        self._running = True
+        logger.info("Starting async device scan")
+        
+        working_count = 0
+        failed_count = 0
+        
+        try:
+            # Clear sounddevice cache
+            try:
+                sd._terminate()
+                sd._initialize()
+            except:
+                pass
+
+            # Get default input device
+            default_input_index = None
+            try:
+                default_input_index, _ = sd.default.device
+                if isinstance(default_input_index, str):
+                    default_input_index = None
+            except:
+                pass
+
+            # Get all devices
+            try:
+                sd_devices = sd.query_devices()
+            except Exception as e:
+                self.error.emit(f"Error listing devices: {e}")
+                self.scanFinished.emit(0, 0)
+                self.finished.emit()
+                return
+
+            tested_devices = set()
+            
+            for idx, device in enumerate(sd_devices):
+                if not self._running:
+                    break
+                    
+                if device.get('max_input_channels', 0) > 0:
+                    name = device.get('name', '')
+                    lower = name.lower()
+                    
+                    # Filter out likely non-functional devices
+                    if name == "Line ()" or (name.startswith("Input (") and "hands-free" not in lower):
+                        continue
+                        
+                    self.status.emit(f"Testing: {name}...")
+                    
+                    # Test device (simplified test for speed)
+                    try:
+                        # Just check if we can open the stream with default settings
+                        sr = int(device.get('default_samplerate', 44100))
+                        try:
+                            sd.check_input_settings(device=idx, channels=1, samplerate=sr)
+                            
+                            quality = 50
+                            device_info = {
+                                'idx': idx,
+                                'name': name,
+                                'lower': lower,
+                                'sample_rate': sr,
+                                'quality': quality,
+                                'is_default': idx == default_input_index
+                            }
+                            
+                            self.deviceFound.emit(device_info)
+                            working_count += 1
+                            tested_devices.add(name)
+                            
+                        except Exception as e:
+                            failed_count += 1
+                            
+                    except Exception as e:
+                        failed_count += 1
+            
+            # Fallback: SR devices
+            try:
+                sr_devices = sr.Microphone.list_microphone_names()
+                for i, name in enumerate(sr_devices):
+                    if not self._running:
+                        break
+                    if name not in tested_devices:
+                        lower = (name or "").lower()
+                        if any(x in lower for x in ['output', 'speaker', 'lautsprecher', 'spdif']):
+                            continue
+                            
+                        self.deviceFound.emit({
+                            'idx': i,
+                            'name': f"[SR] {name}",
+                            'lower': lower,
+                            'sample_rate': 44100,
+                            'quality': 40,
+                            'is_default': False
+                        })
+                        working_count += 1
+            except:
+                pass
+
+        except Exception as e:
+            logger.error(f"Scan error: {e}")
+            self.error.emit(str(e))
+            
+        self.scanFinished.emit(working_count, failed_count)
+        self.finished.emit()
+
+    def stop(self):
+        self._running = False
 
 
 class DictationApp(QMainWindow):
@@ -517,18 +525,6 @@ class DictationApp(QMainWindow):
         
         # Initialize device tracking before first scan
         self.last_device_count = 0
-        self.last_device_names = set()
-        
-        self.scan_devices()
-        
-        # Initialize with current devices to avoid duplicate scan
-        try:
-            devices = sd.query_devices()
-            current = [d for d in devices if d.get('max_input_channels', 0) > 0]
-            self.last_device_count = len(current)
-            self.last_device_names = set(d.get('name', '') for d in current)
-        except:
-            pass
         
         # Start device monitoring (hot-plug detection)
         self.device_monitor = QTimer(self)
@@ -538,570 +534,250 @@ class DictationApp(QMainWindow):
         # Aufnahme-Indicator ohne Blinken
         self.flash_timer = QTimer()
         self.flash_on = False
+        
+        # Initial scan
+        QTimer.singleShot(100, self.start_async_scan)
 
     def setup_ui(self):
-        layout = QVBoxLayout(self.central)
+        """Setup the UI components"""
+        # Main Layout
+        main_layout = QVBoxLayout(self.central)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(30, 30, 30, 30)
         
-        # Device selection
-        device_group = QGroupBox("Microphone")
-        device_layout = QHBoxLayout()
+        # Header
+        header_layout = QHBoxLayout()
+        title = QLabel("Speech Recognition Pro")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #2196F3;")
+        header_layout.addWidget(title)
         
-        self.mic_combo = QComboBox()
-        self.mic_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.mic_combo.setMinimumHeight(32)
+        header_layout.addStretch()
         
-        self.refresh_btn = QPushButton("Refresh")
-        self.reconnect_btn = QPushButton("Reconnect")
-        self.test_btn = QPushButton("Test")
-        self.test_btn.setToolTip("Erweiterte Mikrofon-Tests öffnen")
-        self.config_btn = QPushButton("⚙️")
-        self.config_btn.setToolTip("Gespeicherte Konfigurationen verwalten")
+        settings_btn = QPushButton("⚙️")
+        settings_btn.setFixedSize(40, 40)
+        settings_btn.clicked.connect(self.open_config_manager)
+        header_layout.addWidget(settings_btn)
         
-        device_layout.addWidget(QLabel("Device:"))
-        device_layout.addWidget(self.mic_combo, stretch=1)
-        device_layout.addWidget(self.refresh_btn)
-        device_layout.addWidget(self.reconnect_btn)
-        device_layout.addWidget(self.test_btn)
-        device_layout.addWidget(self.config_btn)
-        device_group.setLayout(device_layout)
+        main_layout.addLayout(header_layout)
         
-        # Controls
+        # Control Panel
+        control_group = QGroupBox("Controls")
         control_layout = QHBoxLayout()
         
+        # Mic Selection
+        self.mic_combo = QComboBox()
+        self.mic_combo.setMinimumWidth(250)
+        self.mic_combo.currentIndexChanged.connect(self.on_device_changed)
+        control_layout.addWidget(QLabel("Microphone:"))
+        control_layout.addWidget(self.mic_combo)
+        
+        # Refresh Button
+        self.refresh_btn = QPushButton("🔄")
+        self.refresh_btn.setFixedSize(30, 30)
+        self.refresh_btn.clicked.connect(self.start_async_scan)
+        control_layout.addWidget(self.refresh_btn)
+        
+        control_layout.addSpacing(20)
+        
+        # Language Selection
         self.lang_combo = QComboBox()
-        self.lang_combo.addItem("— Sprache wählen —")
-        self.lang_combo.addItem("Deutsch + Englisch (Auto)")
-        self.lang_combo.addItems([
-            "German (de-DE)",
-            "English (en-US)",
-            "Russian (ru-RU)",
-            "French (fr-FR)",
-            "Spanish (es-ES)"
-        ])
-        # Standard auf Deutsch setzen, bevor Signale verbunden werden
-        index_de = self.lang_combo.findText("German (de-DE)")
-        if index_de >= 0:
-            self.lang_combo.setCurrentIndex(index_de)
-            self.language = "de-DE"
-        
-        self.start_btn = QPushButton("▶ START RECORDING")
-        self.start_btn.setMinimumHeight(50)
-        self.start_btn.setMinimumWidth(200)
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                font-weight: bold;
-                font-size: 18px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #ccc;
-            }
-        """)
-        self.start_btn.setEnabled(False)
-        
-        self.stop_btn = QPushButton("⏹ STOP")
-        self.stop_btn.setMinimumHeight(50)
-        self.stop_btn.setMinimumWidth(200)
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f44336;
-                color: white;
-                font-weight: bold;
-                font-size: 18px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #da190b;
-            }
-            QPushButton:disabled {
-                background-color: #ccc;
-            }
-        """)
-        
+        self.lang_combo.addItems(["Auto-Detect", "German (DE)", "English (US)", "Russian (RU)", "French (FR)", "Spanish (ES)"])
+        self.lang_combo.currentIndexChanged.connect(self.on_language_changed)
         control_layout.addWidget(QLabel("Language:"))
         control_layout.addWidget(self.lang_combo)
+        
         control_layout.addStretch()
+        
+        # Action Buttons
+        self.start_btn = QPushButton("Start Recording")
+        self.start_btn.clicked.connect(self.start_dictation)
+        self.start_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 16px;")
         control_layout.addWidget(self.start_btn)
+        
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.clicked.connect(self.stop_dictation)
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold; padding: 8px 16px;")
         control_layout.addWidget(self.stop_btn)
         
-        # Mikrofon-Pegelanzeige
-        self.mic_level_bar = MicLevelBar(self)
-        self.mic_level_bar.setMaximumHeight(80)
+        self.test_btn = QPushButton("Test Mic")
+        self.test_btn.clicked.connect(self.open_test_dialog)
+        control_layout.addWidget(self.test_btn)
         
-        # Waveform display
-        self.waveform = WaveformWidget(self)
+        control_group.setLayout(control_layout)
+        main_layout.addWidget(control_group)
         
-        # Big status indicator
-        self.status_label = QLabel("⚪ Ready")
-        self.status_label.setMinimumHeight(60)
+        # Visualization
+        viz_layout = QHBoxLayout()
+        
+        # Waveform
+        self.waveform = WaveformWidget()
+        viz_layout.addWidget(self.waveform, stretch=2)
+        
+        # Level Bar
+        self.mic_level_bar = MicLevelBar()
+        viz_layout.addWidget(self.mic_level_bar, stretch=1)
+        
+        main_layout.addLayout(viz_layout)
+        
+        # Status Label
+        self.status_label = QLabel("Ready")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet("""
-            QLabel {
-                background-color: #e0e0e0;
-                color: #333;
-                padding: 15px;
-                border-radius: 8px;
-                font-weight: bold;
-                font-size: 20px;
-            }
-        """)
+        main_layout.addWidget(self.status_label)
         
-        # Recording indicator
-        self.recording_label = QLabel("")
-        self.recording_label.setMinimumHeight(30)
+        # Recording Indicator
+        self.recording_label = QLabel("🔴 RECORDING")
         self.recording_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.recording_label.hide()
+        main_layout.addWidget(self.recording_label)
         
-        # Text area
+        # Text Output
         self.text = QTextEdit()
-        self.text.setPlaceholderText(
-            "Your text will appear here...\n\n"
-            "IMPORTANT:\n"
-            "1. Click START\n"
-            "2. Wait for 'RECORDING' status\n"
-            "3. Start speaking IMMEDIATELY\n"
-            "4. Speak LOUD and CLEAR"
-        )
-        self.text.setStyleSheet("""
-            QTextEdit {
-                font-size: 16px;
-                padding: 15px;
-                border: 2px solid #ccc;
-                border-radius: 4px;
-            }
+        self.text.setPlaceholderText("Transcription will appear here...")
+        self.text.setStyleSheet("font-size: 14px; line-height: 1.5;")
+        main_layout.addWidget(self.text)
+        
+        # Footer
+        footer_layout = QHBoxLayout()
+        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.text.toPlainText()))
+        footer_layout.addWidget(copy_btn)
+        footer_layout.addStretch()
+        main_layout.addLayout(footer_layout)
+        
+        # Dark Theme
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1e1e1e; color: #ffffff; }
+            QWidget { color: #ffffff; }
+            QGroupBox { border: 1px solid #333; margin-top: 10px; padding-top: 10px; font-weight: bold; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; }
+            QComboBox { background-color: #333; border: 1px solid #555; padding: 5px; border-radius: 4px; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #aaa; margin-right: 5px; }
+            QPushButton { background-color: #333; border: 1px solid #555; padding: 6px 12px; border-radius: 4px; }
+            QPushButton:hover { background-color: #444; }
+            QPushButton:pressed { background-color: #222; }
+            QTextEdit { background-color: #252526; border: 1px solid #333; border-radius: 4px; padding: 10px; }
+            QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; }
+            QProgressBar::chunk { background-color: #2196F3; }
+            QStatusBar { background-color: #007acc; color: white; }
         """)
-        
-        # Actions
-        action_layout = QHBoxLayout()
-        self.clear_btn = QPushButton("Clear")
-        self.copy_btn = QPushButton("Copy")
-        
-        action_layout.addWidget(self.clear_btn)
-        action_layout.addWidget(self.copy_btn)
-        action_layout.addStretch()
-        
-        # Layout
-        layout.addWidget(device_group)
-        layout.addLayout(control_layout)
-        layout.addWidget(self.mic_level_bar)  # Pegelanzeige hinzufügen
-        layout.addWidget(self.waveform)  # Waveform hinzufügen
-        layout.addWidget(self.status_label)
-        layout.addWidget(self.recording_label)
-        layout.addWidget(self.text, stretch=1)
-        layout.addLayout(action_layout)
-        
-        # Connect
-        self.refresh_btn.clicked.connect(self.scan_devices)
-        self.reconnect_btn.clicked.connect(self.attempt_reconnect)
-        self.test_btn.clicked.connect(self.open_test_dialog)
-        self.config_btn.clicked.connect(self.open_config_manager)
-        self.start_btn.clicked.connect(self.start_dictation)
-        self.stop_btn.clicked.connect(self.stop_dictation)
-        self.clear_btn.clicked.connect(self.text.clear)
-        self.copy_btn.clicked.connect(self.copy_text)
-        self.mic_combo.currentIndexChanged.connect(self.update_start_button_state)
-        # Jetzt erst Sprachsignal verbinden (verhindert Frühaufruf, wenn Buttons noch fehlen)
-        self.lang_combo.currentTextChanged.connect(self.on_language_changed)
 
-    def test_device_with_sounddevice(self, device_idx, device_info):
-        """Test if a device works with sounddevice (like in Mikrophon.Test.py)"""
-        try:
-            # Get device details
-            device = sd.query_devices(device_idx)
-            samplerate = int(device.get('default_samplerate', 44100))
-            max_channels = device.get('max_input_channels', 1)
-            channels = min(1, max_channels)
-            
-            # Test configurations in order of preference
-            configurations = [
-                (channels, 44100, None),  # Standard for modern Bluetooth
-                (channels, samplerate, None),  # Device default
-                (channels, 48000, None),
-                (channels, 16000, None),  # Legacy Bluetooth
-                (channels, 8000, None),
-            ]
-            
-            for ch, sr, latency in configurations:
-                try:
-                    # Test if configuration works (like in Mikrophon.Test.py)
-                    sd.check_input_settings(device=device_idx, channels=ch, samplerate=sr)
-                    
-                    # Quick audio level test (0.3 seconds) to check for actual signal
-                    quality = 50  # Default quality for devices that pass basic test
-                    try:
-                        # Try to activate the device with warmup
-                        warmup_stream = sd.InputStream(
-                            device=device_idx,
-                            channels=ch,
-                            samplerate=sr,
-                            blocksize=512,
-                            dtype='float32'
-                        )
-                        warmup_stream.start()
-                        time.sleep(0.1)  # Brief warmup
-                        warmup_stream.close()
-                        
-                        # Now record a test sample
-                        recording = sd.rec(int(0.3 * sr), samplerate=sr, channels=ch,
-                                         device=device_idx, dtype='float32')
-                        sd.wait()
-                        
-                        # Check if device has any signal
-                        max_val = np.max(np.abs(recording))
-                        
-                        # Don't reject devices with low signal - Bluetooth devices often start quiet
-                        if max_val < 0.00001:  # Extremely low signal
-                            # Device might be Bluetooth that needs activation
-                            quality = 25  # Low quality score but still usable
-                            logger.debug(f"Device {device_idx} has very low signal (max={max_val:.6f}), may need warmup")
-                        elif max_val < 0.0001:
-                            quality = 35  # Moderate-low quality
-                            logger.debug(f"Device {device_idx} has low signal (max={max_val:.6f})")
-                        elif max_val > 0:
-                            # Calculate quality percentage (improved scale)
-                            # Scale: 0.0001 = 35%, 0.001 = 50%, 0.01 = 70%, 0.1 = 90%, 1.0 = 100%
-                            if max_val >= 0.1:
-                                quality = 90
-                            elif max_val >= 0.01:
-                                quality = 70
-                            elif max_val >= 0.001:
-                                quality = 50
-                            else:
-                                quality = 40
-                        
-                        # Additional test: Try to open a stream (catches WDM-KS failures)
-                        # This is crucial for devices that appear to work but fail when actually used
-                        try:
-                            test_stream = sd.InputStream(
-                                device=device_idx,
-                                channels=ch,
-                                samplerate=sr,
-                                blocksize=512,
-                                dtype='float32'
-                            )
-                            test_stream.close()
-                            logger.debug(f"Device {device_idx} works with {sr}Hz, {ch}ch (signal={max_val:.4f}, quality={quality}%, stream OK)")
-                        except Exception as stream_err:
-                            err_str = str(stream_err)
-                            # Check for various WDM-KS related errors that indicate the device won't work
-                            if ('Invalid device' in err_str or 
-                                'PaErrorCode -9996' in err_str or
-                                'Windows WDM-KS error' in err_str or
-                                'PaErrorCode -9999' in err_str or
-                                'Blocking API not supported' in err_str):
-                                logger.debug(f"Device {device_idx} has WDM-KS issues, skipping: {stream_err}")
-                                return False, None, None, 0
-                            # Other stream errors might be recoverable
-                            logger.debug(f"Device {device_idx} stream test warning: {stream_err}")
-                        
-                        return True, sr, ch, quality
-                        
-                    except Exception as rec_err:
-                        # Recording failed - check error type
-                        err_str = str(rec_err)
-                        if 'WDM-KS error' in err_str or 'DeviceIoControl' in err_str:
-                            # Device not properly connected/available
-                            logger.debug(f"Device {device_idx} not available (WDM-KS error), skipping")
-                            return False, None, None, 0
-                        
-                        # Other errors - might still work with warmup
-                        logger.debug(f"Recording test skipped for device {device_idx}: {rec_err}")
-                        logger.debug(f"Device {device_idx} tentatively accepted at {sr}Hz, {ch}ch")
-                        return True, sr, ch, 45  # Default quality for untested devices (slightly below average)
-                        
-                except Exception as e:
-                    logger.debug(f"Config {sr}Hz failed for device {device_idx}: {e}")
-                    continue
-            
-            return False, None, None, 0
-        except Exception as e:
-            logger.debug(f"Sounddevice test failed for device {device_idx}: {e}")
-            return False, None, None, 0
-    
-    def scan_devices(self):
-        logger.info("Scanning devices with hybrid approach")
-        self.status_label.setText("🔍 Scanning devices...")
-        QApplication.processEvents()
-
-        # Clear sounddevice cache
-        try:
-            sd._terminate()
-            sd._initialize()
-        except:
-            pass
-
-        # Get default input device
-        default_input_index = None
-        try:
-            default_input_index, _ = sd.default.device
-            if isinstance(default_input_index, str):
-                default_input_index = None  # Ignore if it's a string
-            logger.info(f"Default input device index: {default_input_index}")
-        except:
-            pass
-
-        try:
-            # Get all devices from both libraries
-            sr_devices = sr.Microphone.list_microphone_names()
-            sd_devices = sd.query_devices()
-        except Exception as e:
-            logger.exception("Error listing devices")
-            self.status_label.setText(f"❌ Error: {e}")
-            self.mic_combo.clear()
-            self.update_start_button_state()
-            return
-
+    def start_async_scan(self):
+        """Start asynchronous device scan"""
         self.mic_combo.clear()
-        self.device_configs = {}  # Store working configs
-        candidate_indices = []
-        preferred_index = -1
-        tested_devices = set()
-        failed_devices = []  # Track devices that fail tests
-        working_devices = []  # Store devices with quality for sorting
-        default_device_combo_index = -1  # Track where default device ends up in combo
+        self.mic_combo.addItem("Scanning...", None)
+        self.mic_combo.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
+        self.status_label.setText("Scanning devices...")
         
-        # Test devices using sounddevice first (more reliable)
-        for idx, device in enumerate(sd_devices):
-            if device.get('max_input_channels', 0) > 0:
-                name = device.get('name', '')
-                lower = name.lower()
-                
-                # Filter out likely non-functional devices
-                # Skip generic "Line ()" and "Input" devices without proper names
-                if name == "Line ()" or (name.startswith("Input (") and "hands-free" not in lower):
-                    logger.debug(f"Skipping likely non-functional device {idx}: {name}")
-                    continue
-                    
-                # Test remaining devices
-                if True:  # Teste alle anderen Geräte
-                    logger.debug(f"Testing device {idx}: {name}")
-                    
-                    # Test with sounddevice
-                    works, sample_rate, channels, quality = self.test_device_with_sounddevice(idx, device)
-                    
-                    if works:
-                        # Store working configuration
-                        self.device_configs[idx] = {
-                            'sample_rate': sample_rate,
-                            'channels': channels,
-                            'name': name,
-                            'quality': quality
-                        }
-                        
-                        # Collect devices for sorting by quality
-                        working_devices.append({
-                            'idx': idx,
-                            'name': name,
-                            'lower': lower,
-                            'sample_rate': sample_rate,
-                            'quality': quality,
-                            'is_default': idx == default_input_index
-                        })
-                        
-                        tested_devices.add(name)
-                        logger.info(f"Device {idx} added: {name} @ {sample_rate}Hz, quality={quality}%")
-                    else:
-                        failed_devices.append(f"{idx}: {name}")
-                        logger.warning(f"Device {idx} ({name}) failed sounddevice test")
+        self.scan_worker = DeviceScannerWorker()
+        self.scan_thread = QThread()
+        self.scan_worker.moveToThread(self.scan_thread)
         
-        # Sort devices by quality (highest first)
-        working_devices.sort(key=lambda x: x['quality'], reverse=True)
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.deviceFound.connect(self.on_device_found)
+        self.scan_worker.scanFinished.connect(self.on_scan_finished)
+        self.scan_worker.status.connect(self.on_scan_status)
+        self.scan_worker.error.connect(self.on_scan_error)
+        self.scan_worker.finished.connect(self.scan_thread.quit)
+        self.scan_worker.finished.connect(self.scan_worker.deleteLater)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
         
-        # Add sorted devices to combo box
-        for dev in working_devices:
-            idx = dev['idx']
-            name = dev['name']
-            sample_rate = dev['sample_rate']
-            quality = dev['quality']
-            lower = dev['lower']
-            
-            # Samsung Galaxy Buds3 Pro priority
-            if "buds3 pro" in lower or ("kopfhörer" in lower and "buds3" in lower):
-                preferred_index = len(candidate_indices)
-            elif "buds" in lower and "hands-free" in lower:
-                if preferred_index == -1:
-                    preferred_index = len(candidate_indices)
-            
-            # Include quality in display
-            quality_str = f" {quality}%" if quality > 0 else ""
-            display = name if len(name) < 50 else name[:47] + "..."
-            self.mic_combo.addItem(f"{idx}: {display} [{sample_rate}Hz]{quality_str}", idx)
-            
-            # Check if this is the default device
-            if dev['is_default']:
-                default_device_combo_index = self.mic_combo.count() - 1
-                logger.info(f"Found default device at combo index {default_device_combo_index}")
-            
-            candidate_indices.append(idx)
-        
-        # Fallback: Test remaining SR devices not found by sounddevice
-        for i, name in enumerate(sr_devices):
-            if name not in tested_devices:
-                lower = (name or "").lower()
-                # Skip obvious output devices
-                if any(x in lower for x in ['output', 'speaker', 'lautsprecher', 'spdif', 'nvidia', 'realtek digital']):
-                    continue
-                    
-                # Test potential input devices
-                try:
-                    # Quick SR test with proper error handling
-                    test_mic = None
-                    try:
-                        test_mic = sr.Microphone(device_index=i)
-                    except Exception:
-                        # Microphone initialization failed
-                        continue
-                    
-                    if test_mic:
-                        try:
-                            with test_mic as source:
-                                # Just check if we can open it
-                                if hasattr(source, 'stream') and source.stream is not None:
-                                    display = f"[SR] {name}" if len(name) < 50 else f"[SR] {name[:47]}..."
-                                    self.mic_combo.addItem(f"{i}: {display}", i)
-                                    candidate_indices.append(i)
-                                    logger.debug(f"SR device {i} added as fallback")
-                        except Exception:
-                            # Context manager failed
-                            pass
-                except Exception as e:
-                    logger.debug(f"SR device {i} ({name}) failed: {e}")
+        self.scan_thread.start()
 
-        if self.mic_combo.count() > 0:
-            # Priority: 1. Default device, 2. Preferred device (Buds3), 3. First device
-            if default_device_combo_index != -1:
-                self.mic_combo.setCurrentIndex(default_device_combo_index)
-                logger.info(f"Selected default device at combo index {default_device_combo_index}")
-            elif preferred_index != -1:
-                self.mic_combo.setCurrentIndex(preferred_index)
-                logger.info(f"Selected preferred device at combo index {preferred_index}")
-            else:
-                self.mic_combo.setCurrentIndex(0)
-                logger.info("Selected first available device")
-            logger.info(f"Found {self.mic_combo.count()} relevant device(s)")
-            self.status_label.setText(f"✅ Found {self.mic_combo.count()} relevant device(s)")
-        else:
-            logger.warning(f"No working devices found. {len(failed_devices)} devices failed tests.")
-            failed_list = "\n".join(failed_devices[:5])  # Show first 5
-            self.status_label.setText(f"❌ No working devices. Failed: {len(failed_devices)}")
-            if failed_devices:
-                logger.error(f"Failed devices:\n{failed_list}")
-
-        # Log summary
-        if failed_devices:
-            logger.info(f"Scan complete: {self.mic_combo.count()} working, {len(failed_devices)} failed")
+    def on_device_found(self, device_info):
+        """Handle found device"""
+        if self.mic_combo.itemText(0) == "Scanning...":
+            self.mic_combo.clear()
+            
+        name = device_info['name']
+        idx = device_info['idx']
+        self.mic_combo.addItem(f"{name}", idx)
         
+        if device_info['is_default']:
+            self.mic_combo.setCurrentIndex(self.mic_combo.count() - 1)
+
+    def on_scan_finished(self, working, failed):
+        """Handle scan completion"""
+        self.mic_combo.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
+        self.status_label.setText(f"Scan complete. Found {working} devices.")
         self.update_start_button_state()
 
+    def on_scan_status(self, msg):
+        self.status_label.setText(msg)
 
+    def on_scan_error(self, msg):
+        logger.error(f"Scan error: {msg}")
+        self.status_label.setText(f"Scan error: {msg}")
 
-    def on_language_changed(self, text):
-        if "Deutsch + Englisch" in text:
-            self.language = "auto"
-            self.auto_languages = ["de-DE", "en-US"]
-        elif "Auto" in text:
-            self.language = "auto"
-        elif "— Sprache wählen —" in text or not text:
-            self.language = None
-        elif "de-DE" in text:
-            self.language = "de-DE"
-        elif "en-US" in text:
-            self.language = "en-US"
-        elif "ru-RU" in text:
-            self.language = "ru-RU"
-        elif "fr-FR" in text:
-            self.language = "fr-FR"
-        elif "es-ES" in text:
-            self.language = "es-ES"
-        else:
-            self.language = None
-        self.update_start_button_state()
-
-    def _device_config_key(self, device_name: str) -> str:
-        """Generate unique key for device configuration"""
-        return f"device_{device_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:50]}"
-    
-    def load_saved_config_for_current_device(self):
-        """Load saved configuration for the currently selected device"""
-        idx = self.mic_combo.currentData()
-        if idx is None:
-            return None
-        try:
-            info = sd.query_devices(idx)
-            name = info.get('name', 'Unknown')
-            key = self._device_config_key(name)
-            
-            # Check if we have saved config for this device
-            if self.settings.contains(f"{key}_samplerate"):
-                sr = self.settings.value(f"{key}_samplerate", type=int)
-                ch = self.settings.value(f"{key}_channels", type=int)
-                lat_str = self.settings.value(f"{key}_latency", type=str)
-                host_api = self.settings.value(f"{key}_host_api", type=str)
-                
-                latency = None
-                if lat_str and lat_str not in ('None', 'null', ''):
-                    try:
-                        latency = float(lat_str)
-                    except:
-                        latency = None
-                
-                config = {
-                    "samplerate": sr,
-                    "channels": ch,
-                    "latency": latency,
-                    "host_api": host_api
-                }
-                logger.info(f"Loaded saved config for {name}: {config}")
-                return config
-        except Exception as e:
-            logger.warning(f"Could not load saved config: {e}")
-        return None
-    
     def check_device_changes(self):
-        """Check for device hot-plug/unplug events"""
+        """Check for device changes (hot-plug)"""
         try:
+            # Quick check of device count
             devices = sd.query_devices()
-            current = [d for d in devices if d.get('max_input_channels', 0) > 0]
-            count = len(current)
-            names = set(d.get('name', '') for d in current)
+            current_count = len(devices)
             
-            if count != self.last_device_count or names != self.last_device_names:
-                added = names - self.last_device_names
-                removed = self.last_device_names - names
+            # Also check names to detect swaps
+            current_names = {d['name'] for d in devices}
+            
+            if current_count != self.last_device_count or current_names != self.last_device_names:
+                logger.info("Device change detected")
+                self.last_device_count = current_count
+                self.last_device_names = current_names
                 
-                self.last_device_count = count
-                self.last_device_names = names
+                # Only trigger scan if not already scanning
+                if self.refresh_btn.isEnabled():
+                    self.start_async_scan()
+        except:
+            pass
+
+    def on_device_changed(self, index):
+        """Handle device selection change"""
+        self.update_start_button_state()
+        device_idx = self.mic_combo.currentData()
+        if device_idx is not None:
+            self.mic_level_bar.setDevice(device_idx)
+
+    def on_language_changed(self, index):
+        """Handle language selection change"""
+        langs = ["auto", "de-DE", "en-US", "ru-RU", "fr-FR", "es-ES"]
+        if 0 <= index < len(langs):
+            self.language = langs[index]
+        self.update_start_button_state()
+
+    def load_saved_config_for_current_device(self):
+        """Load saved config for currently selected device"""
+        device_idx = self.mic_combo.currentData()
+        if device_idx is None:
+            return {}
+            
+        try:
+            device_info = sd.query_devices(device_idx)
+            device_name = device_info.get('name', '')
+            key = self._device_config_key(device_name)
+            
+            config = {}
+            if self.settings.contains(f"{key}_samplerate"):
+                config['samplerate'] = self.settings.value(f"{key}_samplerate", type=int)
+            if self.settings.contains(f"{key}_channels"):
+                config['channels'] = self.settings.value(f"{key}_channels", type=int)
+            if self.settings.contains(f"{key}_latency"):
+                lat = self.settings.value(f"{key}_latency")
+                config['latency'] = float(lat) if lat != "None" else None
+            if self.settings.contains(f"{key}_host_api"):
+                config['host_api'] = self.settings.value(f"{key}_host_api")
                 
-                # Only refresh if there were actual changes and not during recording
-                if (added or removed) and self.worker is None:
-                    # Show notification
-                    messages = []
-                    if added:
-                        messages.append(f"🔌 Neu: {list(added)[0][:30]}")
-                    if removed:
-                        messages.append(f"🔍 Entfernt: {list(removed)[0][:30]}")
-                    
-                    if messages:
-                        self.status_label.setText(" | ".join(messages))
-                        logger.info(f"Device changes detected - Added: {added}, Removed: {removed}")
-                        
-                        # Refresh device list
-                        self.scan_devices()
-                        
-                        # Clear notification after 5 seconds
-                        QTimer.singleShot(5000, lambda: self.status_label.setText("⚪ Ready"))
-        except Exception as e:
-            logger.debug(f"Error checking device changes: {e}")
-    
+            return config
+        except:
+            return {}
+
+    def _device_config_key(self, device_name):
+        return f"device_{device_name.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:50]}"
+
     def open_test_dialog(self):
-        """Open test dialog with options for single or batch test"""
-        # Create selection dialog
+        """Open dialog to choose between single and batch test"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Mikrofon-Tests")
         dialog.setMinimumSize(400, 200)
@@ -1132,7 +808,7 @@ class DictationApp(QMainWindow):
         
         dialog.setLayout(layout)
         dialog.exec()
-    
+
     def run_single_test(self, parent_dialog):
         """Run test for single selected device"""
         parent_dialog.close()
@@ -1427,7 +1103,7 @@ class DictationApp(QMainWindow):
         layout.addLayout(btn_layout)
         dialog.setLayout(layout)
         dialog.exec()
-    
+
     def update_start_button_state(self):
         # Abwehr gegen Aufrufe während UI-Aufbau
         if not hasattr(self, 'start_btn'):
@@ -1659,143 +1335,22 @@ class DictationApp(QMainWindow):
         QMessageBox.warning(self, "Connection Error",
             "Could not connect to speech recognition service.\n\n"
             "Please check:\n"
-            "• Internet connection\n"
+            "• Your internet connection\n"
             "• Firewall settings\n"
-            "• Proxy configuration\n\n"
-            "The app will work again once connection is restored.")
-    
+            "• VPN configuration")
+
     def open_config_manager(self):
-        """Open configuration management dialog"""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("🔧 Konfigurationen verwalten")
-        dialog.setModal(True)
-        dialog.resize(600, 400)
-        
-        layout = QVBoxLayout()
-        
-        # Info label
-        info_label = QLabel("Hier können Sie gespeicherte Gerätekonfigurationen verwalten:")
-        layout.addWidget(info_label)
-        
-        # Config list
-        config_list = QListWidget()
-        config_list.setAlternatingRowColors(True)
-        
-        # Load saved configs
-        all_keys = self.settings.allKeys()
-        devices = {}
-        
-        for key in all_keys:
-            if '_samplerate' in key:
-                device_key = key.replace('_samplerate', '')
-                sr = self.settings.value(f"{device_key}_samplerate", type=int)
-                ch = self.settings.value(f"{device_key}_channels", type=int)
-                host = self.settings.value(f"{device_key}_host_api", "Unknown")
-                
-                # Clean up device name for display
-                display_name = device_key.replace('device_', '').replace('_', ' ')
-                if len(display_name) > 50:
-                    display_name = display_name[:47] + "..."
-                
-                devices[device_key] = {
-                    'display': display_name,
-                    'sr': sr,
-                    'ch': ch,
-                    'host': host
-                }
-        
-        if devices:
-            for key, info in devices.items():
-                item_text = f"📱 {info['display']}\n   → {info['sr']}Hz, {info['ch']}ch, {info['host']}"
-                item = QListWidgetItem(item_text)
-                item.setData(Qt.ItemDataRole.UserRole, key)
-                config_list.addItem(item)
-        else:
-            config_list.addItem("Keine gespeicherten Konfigurationen vorhanden")
-        
-        layout.addWidget(config_list)
-        
-        # Buttons
-        btn_layout = QHBoxLayout()
-        
-        # Delete selected button
-        delete_btn = QPushButton("🗑️ Ausgewählte löschen")
-        def delete_selected():
-            item = config_list.currentItem()
-            if item:
-                key = item.data(Qt.ItemDataRole.UserRole)
-                if key:
-                    reply = QMessageBox.question(dialog, "Konfiguration löschen",
-                        f"Möchten Sie die Konfiguration für\n'{devices[key]['display']}'\nwirklich löschen?",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        # Remove all related settings
-                        self.settings.remove(f"{key}_samplerate")
-                        self.settings.remove(f"{key}_channels")
-                        self.settings.remove(f"{key}_latency")
-                        self.settings.remove(f"{key}_host_api")
-                        self.settings.sync()
-                        
-                        # Remove from list
-                        config_list.takeItem(config_list.row(item))
-                        del devices[key]
-                        
-                        if not devices:
-                            config_list.addItem("Keine gespeicherten Konfigurationen vorhanden")
-                        
-                        logger.info(f"Deleted config for {key}")
-        
-        delete_btn.clicked.connect(delete_selected)
-        btn_layout.addWidget(delete_btn)
-        
-        # Clear all button
-        clear_all_btn = QPushButton("🗑️ Alle löschen")
-        def clear_all():
-            if devices:
-                reply = QMessageBox.question(dialog, "Alle Konfigurationen löschen",
-                    f"Möchten Sie wirklich ALLE {len(devices)} gespeicherten Konfigurationen löschen?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                
-                if reply == QMessageBox.StandardButton.Yes:
-                    self.settings.clear()
-                    self.settings.sync()
-                    config_list.clear()
-                    config_list.addItem("Keine gespeicherten Konfigurationen vorhanden")
-                    devices.clear()
-                    logger.info("Cleared all device configs")
-        
-        clear_all_btn.clicked.connect(clear_all)
-        btn_layout.addWidget(clear_all_btn)
-        
-        # Close button
-        close_btn = QPushButton("Schließen")
-        close_btn.clicked.connect(dialog.close)
-        btn_layout.addWidget(close_btn)
-        
-        layout.addLayout(btn_layout)
-        
-        # Stats label
-        stats_label = QLabel(f"📊 {len(devices)} Konfiguration(en) gespeichert")
-        layout.addWidget(stats_label)
-        
-        dialog.setLayout(layout)
-        dialog.exec()
+        """Open configuration manager dialog"""
+        QMessageBox.information(self, "Settings", "Configuration manager not implemented yet.")
 
     def on_finished(self):
+        """Handle worker finished"""
+        logger.info("Worker finished")
         if self.thread:
             self.thread.quit()
-            if not self.thread.wait(3000):
-                self.thread.terminate()
-            self.thread = None
-        
+            self.thread.wait()
         self.worker = None
-        
-        # Stop mic level monitor
-        self.mic_level_bar.stop()
-        
-        # Clear waveform
-        self.waveform.clear_waveform()
+        self.thread = None
         
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -1827,7 +1382,7 @@ class DictationApp(QMainWindow):
             # kurzen Moment warten und neu starten
             QTimer.singleShot(500, self.start_dictation)
         else:
-            self.scan_devices()
+            self.start_async_scan()
 
     def copy_text(self):
         text = self.text.toPlainText()
