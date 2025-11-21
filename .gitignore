@@ -19,11 +19,14 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Virtual Environment
 venv/
 ENV/
 env/
+.env
+.venv/
 
 # IDE
 .vscode/
@@ -31,12 +34,16 @@ env/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
+.settings/
 
 # Project specific
 SprachEingabe.log
 *.log
 device_configs.json
 threshold_config.json
+threshold_cache.json
 
 # OS
 .DS_Store

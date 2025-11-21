@@ -1,123 +1,73 @@
-# Diktieren - Speech-to-Text Dictation App
+# 🎙️ Diktieren - Speech-to-Text Pro
 
-Eine Windows-Desktop-Anwendung für Spracheingabe mit umfassender Bluetooth-Unterstützung und automatischer Geräteerkennung.
+![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
+![Status](https://img.shields.io/badge/status-Active-success.svg)
 
-## Features
+Eine professionelle Windows-Desktop-Anwendung für Spracheingabe mit Fokus auf Bluetooth-Headsets, automatischer Geräteerkennung und Echtzeit-Visualisierung.
 
-- **Spracherkennung** in mehreren Sprachen (Deutsch, Englisch, Russisch, Französisch, Spanisch)
-- **Echtzeit-Waveform-Visualisierung** - Live-Anzeige der Audio-Wellenform während der Aufnahme
-- **Automatische Geräte-Erkennung** mit Qualitätsmessung (0-100%)
-- **Bluetooth-Unterstützung** mit spezieller Optimierung für Samsung Galaxy Buds und andere Bluetooth-Kopfhörer
-- **Hot-Plug-Erkennung** - Geräte werden automatisch erkannt beim Anschließen/Trennen
-- **Intelligente Geräte-Filterung** - Nicht-funktionierende Geräte werden automatisch ausgefiltert
-- **Konfigurations-Speicherung** - Einstellungen werden pro Gerät gespeichert
-- **Erweiterte Test-Funktionen** für Mikrofon-Debugging
-- **Audio-Level-Monitor** - Visuelle Pegelanzeige in Echtzeit
+## ✨ Features
 
-## Installation
+*   **Multi-Language Support**: Deutsch, Englisch, Russisch, Französisch, Spanisch.
+*   **Echtzeit-Visualisierung**: Live-Waveform und Audio-Level-Monitor.
+*   **Smart Device Management**:
+    *   Automatische Erkennung neuer Geräte (Hot-Plug).
+    *   Qualitätsmessung (0-100%) für jedes Mikrofon.
+    *   Intelligente Filterung defekter Treiber (WDM-KS).
+*   **Bluetooth-Optimierung**: Spezielle Algorithmen für Samsung Galaxy Buds und andere Bluetooth-Headsets (Warmup-Phasen, Latenz-Kompensation).
+*   **Persistente Konfiguration**: Speichert Einstellungen pro Gerät.
+
+## 🚀 Quick Start
 
 ### Voraussetzungen
 
-- Windows 10/11
-- Python 3.8 oder höher
-- Mikrofon (USB, Bluetooth oder eingebaut)
+*   Windows 10 oder 11
+*   Python 3.8+
 
-### Setup
+### Installation
 
-1. Repository klonen:
-```bash
-git clone https://github.com/Moddy14/Diktieren.git
-cd Diktieren
-```
+1.  **Repository klonen**
+    ```bash
+    git clone https://github.com/Moddy14/Diktieren.git
+    cd Diktieren
+    ```
 
-2. Abhängigkeiten installieren:
-```bash
-pip install -r requirements.txt
-```
+2.  **Abhängigkeiten installieren**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-3. Anwendung starten:
-```bash
-python Diktieren.py
-```
+3.  **Starten**
+    ```bash
+    python Diktieren.py
+    ```
 
-## Verwendung
+## 📖 Dokumentation
 
-1. **Gerät auswählen**: Die App zeigt alle verfügbaren Mikrofone mit Qualitätsprozenten an
-2. **Sprache wählen**: Deutsch, Englisch oder Auto-Erkennung
-3. **Start klicken**: Nach 3-Sekunden-Countdown beginnt die Aufnahme
-4. **Sprechen**: Der erkannte Text erscheint im Textfeld
-5. **Stop klicken**: Beendet die Aufnahme
+*   [Entwickler-Dokumentation](docs/DEVELOPMENT.md) - Architektur und technische Details.
+*   [Contributing](CONTRIBUTING.md) - Wie du mithelfen kannst.
+*   [Code of Conduct](CODE_OF_CONDUCT.md) - Unsere Verhaltensregeln.
 
-### Tastenkürzel
+## 🛠️ Verwendung
 
-- `Strg+S`: Aufnahme starten/stoppen
-- `Strg+C`: Text kopieren
-- `Strg+A`: Alles auswählen
+1.  **Gerät wählen**: Wähle dein Mikrofon aus der Liste (Qualität wird angezeigt).
+2.  **Sprache wählen**: Wähle die Zielsprache oder "Auto".
+3.  **Start**: Klicke auf "Start" oder drücke `Strg+S`.
+4.  **Diktieren**: Sprich nach dem Countdown.
+5.  **Stop**: Klicke "Stop" oder drücke erneut `Strg+S`.
 
-## Bluetooth-Geräte
+## 🤝 Contributing
 
-Die App wurde speziell für Bluetooth-Kopfhörer optimiert:
+Beiträge sind willkommen! Bitte lies unsere [Contributing Guidelines](CONTRIBUTING.md) für Details.
 
-- Automatische Warmup-Phase für Bluetooth-Geräte
-- Spezielle Unterstützung für Samsung Galaxy Buds
-- WDM-KS Fehler-Erkennung und -Filterung
-- Kontinuierliche Aufnahme statt Threshold-basiert für bessere Bluetooth-Kompatibilität
+## 📄 Lizenz
 
-## Troubleshooting
+Dieses Projekt ist unter der MIT Lizenz lizenziert - siehe [LICENSE](LICENSE) für Details.
 
-### Gerät wird nicht erkannt
-- "Refresh" klicken um Geräteliste zu aktualisieren
-- Bluetooth-Gerät neu verbinden
-- Windows-Audioeinstellungen prüfen
+## 👤 Autor
 
-### Keine Spracherkennung
-- Lautstärke prüfen (Qualitätsprozente sollten > 0% sein)
-- Andere Sprache probieren
-- Test-Dialog öffnen für erweiterte Diagnose
+**Heinrich Moddy**
 
-### WDM-KS Fehler
-- Geräte mit WDM-KS Fehlern werden automatisch ausgefiltert
-- Alternative Geräte werden automatisch vorgeschlagen
-
-## Konfiguration
-
-Die App speichert Einstellungen in:
-- `threshold_config.json` - Schwellenwerte pro Gerät
-- `device_configs.json` - Arbeitsende Konfigurationen
-
-## Entwicklung
-
-### Projekt-Struktur
-```
-Diktieren/
-├── Diktieren.py          # Hauptanwendung
-├── requirements.txt      # Python-Abhängigkeiten
-├── threshold_config.json # Gespeicherte Schwellenwerte
-├── device_configs.json   # Gespeicherte Gerätekonfigurationen
-├── CLAUDE.md            # Entwicklungs-Dokumentation
-└── SprachEingabe.log    # Debug-Log
-```
-
-### Bekannte Limitierungen
-
-- Windows-only (PyQt6 und sounddevice Windows-APIs)
-- Offline-Spracherkennung (keine Cloud-Services)
-- Maximale Aufnahmequalität abhängig vom Mikrofon
-
-## Lizenz
-
-MIT License - siehe [LICENSE](LICENSE) Datei
-
-## Beiträge
-
-Contributions sind willkommen! Bitte erstelle einen Pull Request oder öffne ein Issue.
-
-## Autor
-
-Heinrich Moddy
-
-## Acknowledgments
-
-- Google Speech Recognition API für die Spracherkennung
-- PyQt6 für die GUI
-- sounddevice für Audio-Verarbeitung
+---
+*Built with Python, PyQt6, and Google Speech Recognition.*

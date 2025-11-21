@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diktieren"
+version = "1.1.0"
+description = "A professional speech-to-text application for Windows"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT License"}
+authors = [
+  {name = "Heinrich Moddy"}
+]
+dependencies = [
+  "PyQt6>=6.5.0",
+  "sounddevice>=0.4.6",
+  "numpy>=1.24.0",
+  "SpeechRecognition>=3.10.0",
+  "pyaudio>=0.2.11",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Moddy14/Diktieren"
+"Bug Tracker" = "https://github.com/Moddy14/Diktieren/issues"
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
