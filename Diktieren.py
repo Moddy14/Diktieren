@@ -642,6 +642,11 @@ class DictationApp(QMainWindow):
         copy_btn = QPushButton("Copy to Clipboard")
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self.text.toPlainText()))
         footer_layout.addWidget(copy_btn)
+
+        clear_btn = QPushButton("🗑️ Löschen")
+        clear_btn.clicked.connect(self.clear_transcription)
+        footer_layout.addWidget(clear_btn)
+
         footer_layout.addStretch()
         main_layout.addLayout(footer_layout)
         
@@ -1230,6 +1235,11 @@ class DictationApp(QMainWindow):
                 color: #ffffff;
             }
         """))
+
+    def clear_transcription(self):
+        """Clear the transcription text area"""
+        self.text.clear()
+        logger.info("Transcription area cleared by user")
 
     def on_status(self, status):
         self.status_label.setText(status)
