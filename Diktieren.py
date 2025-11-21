@@ -548,7 +548,7 @@ class DictationApp(QMainWindow):
         # Header
         header_layout = QHBoxLayout()
         title = QLabel("Speech Recognition Pro")
-        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #2196F3;")
+        title.setStyleSheet("font-size: 28px; font-weight: bold; color: #64B5F6;")
         header_layout.addWidget(title)
         
         header_layout.addStretch()
@@ -649,18 +649,24 @@ class DictationApp(QMainWindow):
         self.setStyleSheet("""
             QMainWindow { background-color: #1e1e1e; color: #ffffff; }
             QWidget { color: #ffffff; }
-            QGroupBox { border: 1px solid #333; margin-top: 10px; padding-top: 10px; font-weight: bold; }
+            QDialog { background-color: #1e1e1e; color: #ffffff; }
+            QLabel { background-color: transparent; color: #ffffff; }
+            QGroupBox { border: 1px solid #555; margin-top: 10px; padding-top: 10px; font-weight: bold; }
             QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; padding: 0 5px; }
-            QComboBox { background-color: #333; border: 1px solid #555; padding: 5px; border-radius: 4px; }
+            QComboBox { background-color: #333; color: #ffffff; border: 1px solid #555; padding: 5px; border-radius: 4px; }
             QComboBox::drop-down { border: none; }
-            QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #aaa; margin-right: 5px; }
+            QComboBox::down-arrow { image: none; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #ffffff; margin-right: 5px; }
+            QComboBox QAbstractItemView { background-color: #2b2b2b; color: #ffffff; selection-background-color: #0d47a1; selection-color: #ffffff; border: 1px solid #555; }
+            QComboBox QAbstractItemView::item { padding: 5px; }
+            QComboBox QAbstractItemView::item:hover { background-color: #1976D2; color: #ffffff; }
+            QComboBox QAbstractItemView::item:selected { background-color: #0d47a1; color: #ffffff; }
             QPushButton { background-color: #333; border: 1px solid #555; padding: 6px 12px; border-radius: 4px; }
             QPushButton:hover { background-color: #444; }
             QPushButton:pressed { background-color: #222; }
             QTextEdit { background-color: #252526; border: 1px solid #333; border-radius: 4px; padding: 10px; }
             QProgressBar { border: 1px solid #444; border-radius: 4px; text-align: center; }
             QProgressBar::chunk { background-color: #2196F3; }
-            QStatusBar { background-color: #007acc; color: white; }
+            QStatusBar { background-color: #1976D2; color: white; }
         """)
 
     def start_async_scan(self):
@@ -1161,11 +1167,12 @@ class DictationApp(QMainWindow):
         self.recording_label.setText("🔴 RECORDING IN PROGRESS - SPEAK NOW!")
         self.recording_label.setStyleSheet("""
                 QLabel {
-                    background-color: #ff0000;
+                    background-color: #cc0000;
                     color: white;
                     font-weight: bold;
                     padding: 5px;
                     border-radius: 4px;
+                    border: 2px solid #ffffff;
                 }
             """)
         self.recording_label.show()
@@ -1209,15 +1216,18 @@ class DictationApp(QMainWindow):
                 padding: 15px;
                 border: 2px solid #4CAF50;
                 border-radius: 4px;
-                background-color: #f1f8e9;
+                background-color: #2d5c2d;
+                color: #ffffff;
             }
         """)
         QTimer.singleShot(500, lambda: self.text.setStyleSheet("""
             QTextEdit {
                 font-size: 16px;
                 padding: 15px;
-                border: 2px solid #ccc;
+                border: 2px solid #555;
                 border-radius: 4px;
+                background-color: #252526;
+                color: #ffffff;
             }
         """))
 
@@ -1249,8 +1259,8 @@ class DictationApp(QMainWindow):
         elif "Calibrat" in status:
             self.status_label.setStyleSheet("""
                 QLabel {
-                    background-color: #FFC107;
-                    color: black;
+                    background-color: #F57C00;
+                    color: white;
                     padding: 15px;
                     border-radius: 8px;
                     font-weight: bold;
@@ -1266,8 +1276,8 @@ class DictationApp(QMainWindow):
         self.status_label.setText(f"❌ {error}")
         self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #ffebee;
-                color: #c62828;
+                background-color: #f44336;
+                color: white;
                 padding: 15px;
                 border-radius: 8px;
                 font-weight: bold;
@@ -1362,8 +1372,8 @@ class DictationApp(QMainWindow):
         self.status_label.setText("⚪ Ready")
         self.status_label.setStyleSheet("""
             QLabel {
-                background-color: #e0e0e0;
-                color: #333;
+                background-color: #4CAF50;
+                color: white;
                 padding: 15px;
                 border-radius: 8px;
                 font-weight: bold;
